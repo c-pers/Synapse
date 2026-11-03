@@ -23,9 +23,9 @@
 
 2. Install dependencies:
    ```bash
-   npm install```
+   npm install
 
 3. Run in development mode (Tauri):
    ```bash
-   npm run tauri dev```
+   npm run tauri dev
 
