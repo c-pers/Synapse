@@ -18,7 +18,7 @@
 
 1. Clone the repository:
    ```bash
-   git clone [https://github.com/c-pers/Synapse.git](https://github.com/c-pers/Synapse.git)
+   git clone https://github.com/c-pers/Synapse.git
    cd Synapse
 
 2. Install dependencies:
