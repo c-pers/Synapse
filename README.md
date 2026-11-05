@@ -16,6 +16,18 @@
 
 ## ⚙️ Getting Started
 
+### Prerequisites
+Before you begin, ensure you have the following installed:
+1. **Node.js** (v18 or higher)
+2. **Rust & Cargo** (Install via [rustup](https://rustup.rs/))
+3. **System Dependencies**: Follow the [Tauri setup guide](https://tauri.app/v1/guides/getting-started/prerequisites) for your specific OS (Windows, macOS, or Linux).
+4. **Ollama**: Synapse uses local AI models. [Download Ollama here](https://ollama.com/).
+   * After installing Ollama, pull a recommended model (e.g., `qwen2.5-coder:7b` or `llama3`):
+     ```bash
+     ollama run qwen2.5-coder:7b
+
+### Installation & Run
+
 1. Clone the repository:
    ```bash
    git clone https://github.com/c-pers/Synapse.git
@@ -28,4 +40,3 @@
 3. Run in development mode (Tauri):
    ```bash
    npm run tauri dev
-
