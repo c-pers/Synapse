@@ -6,3 +6,9 @@ export interface FileNode {
     y: number;
     extension: string;
 }
+
+export interface GraphEdge {
+    from: string;
+    to: string;
+    relation: string;
+}

@@ -1,7 +1,16 @@
+mod graph;
+
+use graph::ProjectGraph;
+
 use std::fs;
 use std::path::Path;
 use reqwest::Client;
 use serde::Deserialize;
+
+#[tauri::command]
+fn get_project_graph(project_path: String) -> Result<ProjectGraph, String> {
+    graph::analyze_dependencies(&project_path).map_err(|e| e.to_string())
+}
 
 #[derive(serde::Serialize)]
 struct FileAnalysis {
@@ -24,7 +33,7 @@ fn analyze_file(path: String) -> Result<FileAnalysis, String> {
                 message: format!("Analysis complete."),
             })
         }
-        Err(e) => {
+        Err(_) => {
             Ok(FileAnalysis {
                 lines: 0,
                 size_bytes,
@@ -39,6 +48,7 @@ pub struct ConversionPayload {
     model: String,
     prompt: String,
     file_content: String,
+    dependency_context: Option<String>,
     ollama_url: Option<String>,
     api_key: Option<String>,
 }
@@ -137,71 +147,67 @@ fn save_converted_project(output_dir: String, files: Vec<ConvertedFilePayload>) 
 }
 
 #[tauri::command]
+async fn read_file_content(file_path: String) -> Result<String, String> {
+    std::fs::read_to_string(&file_path).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 async fn read_and_convert_file(
-    file_path: String,
+    _file_path: String,             // Prefix with _ to suppress unused warning
     model: String,
     prompt: String,
+    _dependency_context: Option<String>, // Prefix with _ to suppress unused warning
     ollama_url: Option<String>,
     api_key: Option<String>,
 ) -> Result<String, String> {
-    let file_content = fs::read_to_string(&file_path)
-        .map_err(|e| format!("Failed to read file at {}: {}", file_path, e))?;
+    // We removed the file_content and full_prompt logic because the TS prompt is already fully built.
 
     let client = Client::new();
     let mut parts = model.splitn(2, ':');
     let provider = parts.next().ok_or("Invalid model format specified.")?;
     let model_name = parts.next().ok_or("Missing model name specified.")?;
 
-    fn clean_ai_response(response: &str) -> String {
-        if let Some(start) = response.find("```") {
-            let rest = &response[start + 3..];
-            if let Some(newline) = rest.find('\n') {
-                let code_content = &rest[newline + 1..];
-                if let Some(end) = code_content.rfind("```") {
-                    return code_content[..end].trim().to_string();
-                }
-            }
-        }
-        
-        // Fallback: se l'IA non ha usato i backtick, restituisce il testo ripulito ma segnala/prova a tenere
-        response.trim().to_string()
-    }
-
     match provider {
         "ollama" => {
             let base_url = ollama_url.unwrap_or_else(|| "http://localhost:11434".to_string());
             let endpoint = format!("{}/api/generate", base_url);
 
+            let is_json_request = prompt.contains("Return ONLY a JSON object");
+
             let body = serde_json::json!({
                 "model": model_name,
-                "prompt": format!("{}\n\nCode/Context:\n{}", prompt, file_content),
-                "stream": false
+                "prompt": prompt,
+                "stream": false,
+                "format": if is_json_request { "json" } else { "" },
+                "options": {
+                    "num_ctx": 8192,
+                    "num_predict": 4096
+                }
             });
 
-            let res = client.post(&endpoint)
-                .json(&body)
-                .send()
-                .await
+            let res = client.post(&endpoint).json(&body).send().await
                 .map_err(|e| format!("Failed to connect to Ollama: {}", e))?;
 
             if !res.status().is_success() {
-                return Err(format!("Ollama error status: {}", res.status()));
+                let status = res.status();
+                let error_body = res.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+                return Err(format!("Ollama error ({}): {}", status, error_body));
             }
 
             let json: serde_json::Value = res.json().await.map_err(|e| e.to_string())?;
-            let response_text = clean_ai_response(json["response"].as_str().unwrap_or(""));
-            Ok(response_text)
+            Ok(json["response"].as_str().unwrap_or("").to_string())
         },
-        "openai" => {
-            let api_key = api_key.ok_or("Missing OpenAI API Key")?;
-            let endpoint = "https://api.openai.com/v1/chat/completions";
+        "openai" | "deepseek" => {
+            let api_key = api_key.ok_or("Missing API Key")?;
+            let endpoint = if provider == "openai" {
+                "https://api.openai.com/v1/chat/completions"
+            } else {
+                "https://api.deepseek.com/v1/chat/completions"
+            };
 
             let body = serde_json::json!({
                 "model": model_name,
-                "messages": [
-                    {"role": "system", "content": prompt},
-                    {"role": "user", "content": file_content}
-                ]
+                "messages": [{ "role": "user", "content": prompt }]
             });
 
             let res = client.post(endpoint)
@@ -209,13 +215,18 @@ async fn read_and_convert_file(
                 .json(&body)
                 .send()
                 .await
-                .map_err(|e| format!("OpenAI request failed: {}", e))?;
+                .map_err(|e| format!("{} request failed: {}", provider, e))?;
+
+            if !res.status().is_success() {
+                let status = res.status();
+                let error_body = res.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+                return Err(format!("{} error ({}): {}", provider, status, error_body));
+            }
 
             let json: serde_json::Value = res.json().await.map_err(|e| e.to_string())?;
-            let content = clean_ai_response(json["choices"][0]["message"]["content"].as_str().unwrap_or(""));
-            Ok(content)
+            Ok(json["choices"][0]["message"]["content"].as_str().unwrap_or("").to_string())
         },
-        _ => Err(format!("Unsupported provider: {}", provider))
+        _ => Err(format!("Unsupported provider: {}", provider)),
     }
 }
 
@@ -229,7 +240,9 @@ pub fn run() {
             analyze_file,
             execute_code_conversion,
             save_converted_project,
-            read_and_convert_file
+            read_and_convert_file,
+            read_file_content,
+            get_project_graph
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
